@@ -1,0 +1,229 @@
+https://github.com/soyoung1122/task_board
+
+# board-dep.yaml
+#
+#
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: board
+spec:
+  selector:
+    matchLabels:
+      app: board
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: board
+    spec:
+      containers:
+        - name: core
+          image: docker.io/soyoung1122/board_task
+          imagePullPolicy: Always
+          volumeMounts:
+            - name: data-volume
+              mountPath: /data/k8s/files
+          env:
+            - name: UPLOAD_DIR
+              value: "/data/k8s/files/"
+            - name: COUNT_LIST
+              value: "10"
+            - name: COUNT_PAGE
+              value: "5"
+            - name: DB_ADDRESS
+              value: "mariadb.default.svc.cluster.local:30306"
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1000Mi
+      volumes:
+        - name: data-volume
+          persistentVolumeClaim:
+              claimName: file-pv-claim
+
+#board-svc.ymal
+#
+#
+apiVersion: v1
+kind: Service
+metadata:
+  name: board-service
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 8080
+      protocol: TCP
+      targetPort: 8080
+  selector:
+    app: board
+
+#file-pv.yaml
+#
+#
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: file-pv-volume
+  labels:
+    type: local
+spec:
+  storageClassName: ""
+  capacity:
+    storage: 50Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/data/k8s/files"
+
+#file-pvc.ymal
+#
+#
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: file-pv-claim
+spec:
+  storageClassName: ""
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+
+# configmap.yaml
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mariadb-initdb-config
+data:
+  create_database.sql: |
+    CREATE DATABASE IF NOT EXISTS studykube;
+    USE studykube;
+  create_board_table.sql: |
+    CREATE TABLE IF NOT EXISTS board (
+      no INT AUTO_INCREMENT PRIMARY KEY,
+      title VARCHAR(256),
+      content LONGTEXT,
+      user_name VARCHAR(50),
+      reg_date DATETIME,
+      update_date DATETIME
+    );
+    INSERT INTO board (title, content, user_name, reg_date, update_date) VALUES ('test title', '<h2>dddddd</h2>', 'soyoung', NOW(), NOW());
+  create_file_table.sql: |
+    CREATE TABLE IF NOT EXISTS file (
+      no INT AUTO_INCREMENT PRIMARY KEY,
+      board_no INT,
+      FOREIGN KEY (board_no) REFERENCES board(no),
+      file_name VARCHAR(256),
+      file_path VARCHAR(512),
+      file_size BIGINT,
+      file_type VARCHAR(20),
+      file_date DATE
+    );
+
+#maria-deployment.yaml
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb
+spec:
+  selector:
+    matchLabels:
+      app: mariadb
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: mariadb
+    spec:
+      containers:
+      - image: docker.io/library/mariadb:11.4
+        name: mariadb
+        ports:
+        - containerPort: 3306
+          name: mariadb
+        volumeMounts:
+        - name: mariadb-persistent-storage
+          mountPath: /docker-entrypoint-initdb.d
+        - mountPath: /var/lib/mysql
+          subPath: "mysql"
+          name: mariadb-data
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mariadb-secret
+              key: password
+      volumes:
+      - name: mariadb-persistent-storage
+        configMap:
+          name: mariadb-initdb-config
+      - name: mariadb-data
+        persistentVolumeClaim:
+          claimName: mariadb-pv-claim
+          
+#mariadb-pv.yaml
+#
+#
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mariadb-pv-volume
+  labels:
+    type: local
+spec:
+  storageClassName: ""
+  capacity:
+    storage: 50Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/data/k8s/db"
+
+# mariadb-pvc.yaml
+#
+#
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mariadb-pv-claim
+spec:
+  storageClassName: ""
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+
+# mariadb-secret.yaml
+#
+#
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mariadb-secret
+data:
+  password: c295b3VuZzExMjI=
+
+# mariadb-svc.yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+spec:
+  type: NodePort
+  ports:
+    - nodePort: 30306
+      port: 30306
+      targetPort: 3306
+      name: mariadb
+  selector:
+    app: mariadb

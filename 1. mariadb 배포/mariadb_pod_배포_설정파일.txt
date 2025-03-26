@@ -1,0 +1,184 @@
+# cronjob.yaml
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mariadb-backup
+spec:
+  schedule: "0 17 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          imagePullSecrets:
+          - name: dockersecret
+          containers:
+          - name: mariadb-backup
+            image: docker.io/library/mariadb:11.4
+            env:
+            - name: MYSQL_USER
+              value: "root"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-secret
+                  key: password
+            volumeMounts:
+            - name: mariadb-data
+              mountPath: /var/lib/mysql
+            - name: nfs-backup-storage
+              mountPath: /backup
+            command: ["/bin/sh"]
+            args:
+            - -c
+            - |
+              find /backup -type f -name "*.sql" -mtime +7 -exec rm {} \;
+              mariadb-dump -h mariadb.default.svc.cluster.local -P 30306 -u$MYSQL_USER -p$MYSQL_PASSWORD studykube > /backup/studykube-backup-$(date +\%F-\%T).sql
+          restartPolicy: OnFailure
+          volumes:
+          - name: mariadb-data
+            persistentVolumeClaim:
+              claimName: mariadb-pv-claim
+          - name: nfs-backup-storage
+            nfs:
+              server: 10.200.50.73
+              path: /home/share/nfs/db_back
+
+
+
+
+# configmap.yaml
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mariadb-initdb-config
+data:
+  init.sql: |
+    CREATE DATABASE IF NOT EXISTS studykube;
+    USE studykube;
+    CREATE TABLE IF NOT EXISTS board (
+      no INT AUTO_INCREMENT PRIMARY KEY,
+      title VARCHAR(256),
+      user_name VARCHAR(50),
+      reg_date DATETIME,
+      update_date DATETIME
+    );
+    INSERT INTO board (title, user_name, reg_date, update_date) VALUES ('test title', 'soyoung', NOW(), NOW());
+    
+    
+    
+# deployment.yaml
+    
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb
+spec:
+  selector:
+    matchLabels:
+      app: mariadb
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: mariadb
+    spec:
+      containers:
+      - image: docker.io/library/mariadb:11.4
+        name: mariadb
+        ports:
+        - containerPort: 3306
+          name: mariadb
+        volumeMounts:
+        - name: mariadb-persistent-storage
+          mountPath: /docker-entrypoint-initdb.d
+        - mountPath: /var/lib/mysql
+          subPath: "mysql"
+          name: mariadb-data
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mariadb-secret
+              key: password
+      volumes:
+      - name: mariadb-persistent-storage
+        configMap:
+          name: mariadb-initdb-config
+      - name: mariadb-data
+        persistentVolumeClaim:
+          claimName: mariadb-pv-claim
+
+
+
+
+
+#mariadb-pv.yaml
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mariadb-pv-volume
+  labels:
+    type: nfs
+spec:
+  capacity:
+    storage: 50Gi
+  accessModes: ["ReadWriteMany"]
+  nfs:
+    server: 10.200.50.73
+    path: /home/share/nfs/db
+
+
+
+
+# mariadb-pvc.yaml
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mariadb-pv-claim
+spec:
+  storageClassName: ""
+  accessModes: ["ReadWriteMany"]
+  resources:
+    requests:
+      storage: 50Gi
+  selector:
+    matchExpressions:
+    - key: type
+      operator: In
+      values:
+      - nfs
+
+
+# mariadb-svc.yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+spec:
+  type: NodePort
+  ports:
+    - nodePort: 30306
+      port: 30306
+      targetPort: 3306
+      name: mariadb
+  selector:
+    app: mariadb
+
+
+# mariadb-secret.yaml
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mariadb-secret
+data:
+  password: c295b3VuZzExMjI=
+
+
+
